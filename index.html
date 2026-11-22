@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>転がし管理</title>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<style>
+:root{--g:#1d5c45;--gd:#143f30;--bg:#f2f5f3;--ln:#cfd8d3;--tx:#1b2420;--mu:#5d6b64;--red:#b3261e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.6 "Hiragino Sans","Yu Gothic",Meiryo,sans-serif}
+header{background:var(--g);padding:12px 16px}
+header a{color:#fff;text-decoration:none;font-size:20px;font-weight:700;letter-spacing:.05em}
+main{max-width:860px;margin:0 auto;padding:16px}
+h2{margin:8px 0 14px;font-size:18px}
+.bar{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap}
+.btn,button{font:inherit;padding:8px 16px;border:1px solid var(--g);background:#fff;color:var(--g);border-radius:6px;cursor:pointer;text-decoration:none;display:inline-block}
+.primary{background:var(--g);color:#fff}
+.danger{border-color:var(--red);color:var(--red)}
+.btn:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #7fb8a0;outline-offset:1px}
+.wrap{overflow-x:auto;background:#fff;border:1px solid var(--ln);border-radius:6px}
+table{border-collapse:collapse;width:100%;min-width:560px}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--ln);white-space:nowrap}
+th{background:#e6ede9;font-weight:600}
+tr[data-href]{cursor:pointer}
+tr[data-href]:hover{background:#eef6f1}
+tr.fail,tr.fail:hover{background:#e4e4e4;color:#555}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.form{background:#fff;border:1px solid var(--ln);border-radius:6px;padding:16px;display:grid;gap:14px;max-width:460px}
+.form label{display:grid;gap:4px;font-weight:600}
+.form input,.form select{font:inherit;padding:8px;border:1px solid var(--ln);border-radius:6px;background:#fff}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+.sum{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 12px;color:var(--mu)}
+.sum b{color:var(--tx)}
+.status{max-width:860px;margin:0 auto;padding:0 16px 16px;color:var(--mu);font-size:13px}
+.empty{padding:24px;text-align:center;color:var(--mu)}
+.err{color:var(--red)}
+</style>
+</head>
+<body>
+<header><a href="#/">転がし管理</a></header>
+<main id="app"></main>
+<div class="status" id="status">Firebaseに接続しています...</div>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyB-qPzDHJSnRHNHKvNd-D-sTu6v1-sRnilI",
+  authDomain: "zatsudan-mate.firebaseapp.com",
+  databaseURL: "https://zatsudan-mate-default-rtdb.firebaseio.com",
+  projectId: "zatsudan-mate",
+  storageBucket: "zatsudan-mate.firebasestorage.app",
+  messagingSenderId: "1008942200664",
+  appId: "1:1008942200664:web:191aa9a2cca34ff32f972d",
+  measurementId: "G-JSPJDPL1P1"
+};
+firebase.initializeApp(firebaseConfig);
+const root = firebase.database().ref("korogashi"); // 既存データと混ざらない専用パス
+
+const COURSES = ["札幌","函館","福島","新潟","東京","中山","中京","京都","阪神","小倉"];
+const TYPES = { tan: "単コロ", fuku: "複コロ" };
+const RES = { none: "未選択", win: "成功", lose: "失敗" };
+const app = document.getElementById("app");
+let data = {}, loaded = false, formOpen = false;
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const yen = n => Number(n).toLocaleString("ja-JP") + "円";
+const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+const opts = (list, sel) => list.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(sel) ? " selected" : ""}>${esc(l)}</option>`).join("");
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+
+function showError(e) {
+  console.error(e);
+  const s = document.getElementById("status");
+  s.textContent = "Firebaseの読み書きに失敗しました。接続とデータベースルールを確認してください。";
+  s.className = "status err";
+}
+
+// 詳細は登録順（createdAt → キー）に並べる
+function detailsOf(k) {
+  return Object.entries(k.details || {}).map(([id, d]) => ({ id, ...d }))
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || (a.id < b.id ? -1 : 1));
+}
+
+// 積算：オッズを順に掛け、各回10円単位で切り捨て。失敗は0。未選択は積算しない。
+function calc(k) {
+  const ds = detailsOf(k);
+  let amt = Number(k.initial) || 0, wins = 0;
+  for (const d of ds) {
+    if (d.result === "lose") amt = 0;
+    else if (d.result === "win") {
+      amt = Math.floor(amt * Math.round(Number(d.odds) * 10) / 100) * 10;
+      wins++;
+    }
+  }
+  const last = ds[ds.length - 1];
+  return { ds, amt, wins, failed: !!last && last.result === "lose" };
+}
+
+/* ---------- 一覧 ---------- */
+function viewList() {
+  const rows = Object.entries(data).map(([id, k]) => ({ id, k, c: calc(k) }))
+    .sort((a, b) => (b.k.createdAt || 0) - (a.k.createdAt || 0));
+  app.innerHTML = `
+    <div class="bar"><h2>転がし一覧</h2><a class="btn primary" href="#/new">新規作成</a></div>
+    <div class="wrap"><table>
+      <thead><tr><th>タイトル</th><th>形式</th><th>ステータス</th><th class="num">成功回数</th><th class="num">初期金額</th><th class="num">現在の金額</th></tr></thead>
+      <tbody>${rows.map(({ id, k, c }) => `
+        <tr data-href="#/k/${esc(id)}" class="${c.failed ? "fail" : ""}">
+          <td>${esc(k.title)}</td><td>${TYPES[k.type] || ""}</td>
+          <td>${c.failed ? "転がし失敗" : "転がし中"}</td>
+          <td class="num">${c.wins}</td><td class="num">${yen(k.initial)}</td><td class="num">${yen(c.amt)}</td>
+        </tr>`).join("")}</tbody>
+    </table>${rows.length ? "" : '<div class="empty">まだ転がしがありません。「新規作成」から登録してください。</div>'}</div>`;
+}
+
+/* ---------- 新規作成 ---------- */
+function viewNew() {
+  formOpen = true;
+  app.innerHTML = `
+    <h2>転がしの新規作成</h2>
+    <div class="form">
+      <label>タイトル<input id="f-title" maxlength="50"></label>
+      <label>形式<select id="f-type">${opts(Object.entries(TYPES), "tan")}</select></label>
+      <label>初期金額（円）<input id="f-init" type="number" min="100" step="100" inputmode="numeric"></label>
+      <div class="btns"><button class="primary" id="f-save">登録</button><a class="btn" href="#/">戻る</a></div>
+    </div>`;
+  document.getElementById("f-save").onclick = () => {
+    const title = document.getElementById("f-title").value.trim();
+    const initial = Math.floor(Number(document.getElementById("f-init").value));
+    if (!title) return alert("タイトルを入力してください");
+    if (!(initial > 0)) return alert("初期金額を入力してください");
+    root.push({ title, type: document.getElementById("f-type").value, initial, createdAt: Date.now() })
+      .then(() => { location.hash = "#/"; }).catch(showError);
+  };
+}
+
+/* ---------- 各転がし詳細 ---------- */
+function viewDetail(id) {
+  const k = data[id], c = calc(k);
+  app.innerHTML = `
+    <div class="bar"><h2>${esc(k.title)}</h2>
+      <div class="btns"><a class="btn" href="#/">一覧へ</a><a class="btn primary" href="#/k/${esc(id)}/new">新規登録</a></div></div>
+    <p class="sum"><span>形式：<b>${TYPES[k.type] || ""}</b></span><span>ステータス：<b>${c.failed ? "転がし失敗" : "転がし中"}</b></span>
+      <span>初期金額：<b>${yen(k.initial)}</b></span><span>現在の金額：<b>${yen(c.amt)}</b></span></p>
+    <div class="wrap"><table>
+      <thead><tr><th>日付</th><th>競馬場</th><th class="num">レース</th><th class="num">馬番</th><th class="num">オッズ</th><th>結果</th></tr></thead>
+      <tbody>${c.ds.map(d => `
+        <tr data-href="#/k/${esc(id)}/edit/${esc(d.id)}">
+          <td>${esc(d.date)}</td><td>${esc(d.course)}</td><td class="num">${esc(d.race)}R</td>
+          <td class="num">${esc(d.horse)}</td><td class="num">${Number(d.odds).toFixed(1)}</td><td>${RES[d.result] || RES.none}</td>
+        </tr>`).join("")}</tbody>
+    </table>${c.ds.length ? "" : '<div class="empty">登録された買い目がありません。「新規登録」から追加してください。</div>'}</div>
+    <p><button class="danger" id="del-k">この転がしを削除</button></p>`;
+  document.getElementById("del-k").onclick = () => {
+    if (confirm("この転がしと登録済みの詳細をすべて削除します。よろしいですか？"))
+      root.child(id).remove().then(() => { location.hash = "#/"; }).catch(showError);
+  };
+}
+
+/* ---------- 詳細登録・編集 ---------- */
+function viewDetailForm(kid, did) {
+  formOpen = true;
+  const d = did ? (data[kid].details || {})[did] : null;
+  if (did && !d) return viewMissing();
+  const v = d || { date: today(), course: COURSES[0], race: 1, horse: 1, odds: "", result: "none" };
+  app.innerHTML = `
+    <h2>${did ? "詳細の編集" : "詳細の新規登録"}</h2>
+    <div class="form">
+      <label>日付<input id="f-date" type="date" value="${esc(v.date)}"></label>
+      <label>競馬場<select id="f-course">${opts(COURSES.map(c => [c, c]), v.course)}</select></label>
+      <label>レース<select id="f-race">${opts(range(1, 12).map(n => [n, n + "R"]), v.race)}</select></label>
+      <label>馬番<select id="f-horse">${opts(range(1, 18).map(n => [n, n]), v.horse)}</select></label>
+      <label>オッズ（小数第一位まで）<input id="f-odds" type="number" min="1.0" step="0.1" inputmode="decimal" value="${esc(v.odds)}"></label>
+      <label>結果<select id="f-result">${opts(Object.entries(RES), v.result)}</select></label>
+      <div class="btns"><button class="primary" id="f-save">登録</button><a class="btn" href="#/k/${esc(kid)}">戻る</a>
+        ${did ? '<button class="danger" id="f-del">削除</button>' : ""}</div>
+    </div>`;
+  const back = () => { location.hash = "#/k/" + kid; };
+  document.getElementById("f-save").onclick = () => {
+    const odds = Math.round(Number(document.getElementById("f-odds").value) * 10) / 10;
+    const date = document.getElementById("f-date").value;
+    if (!date) return alert("日付を選択してください");
+    if (!(odds >= 1)) return alert("オッズは1.0以上の数値を入力してください");
+    const val = {
+      date, course: document.getElementById("f-course").value,
+      race: Number(document.getElementById("f-race").value),
+      horse: Number(document.getElementById("f-horse").value),
+      odds, result: document.getElementById("f-result").value
+    };
+    const ref = root.child(kid + "/details");
+    (did ? ref.child(did).update(val) : ref.push({ ...val, createdAt: Date.now() })).then(back).catch(showError);
+  };
+  if (did) document.getElementById("f-del").onclick = () => {
+    if (confirm("この詳細を削除します。よろしいですか？")) root.child(`${kid}/details/${did}`).remove().then(back).catch(showError);
+  };
+}
+
+function viewMissing() {
+  app.innerHTML = '<div class="empty">データが見つかりません。<br><a href="#/">一覧へ戻る</a></div>';
+}
+
+/* ---------- ルーティング ---------- */
+function route() {
+  if (!loaded) { app.innerHTML = '<div class="empty">読み込み中...</div>'; return; }
+  const p = (location.hash.slice(1) || "/").split("/").filter(Boolean);
+  formOpen = false;
+  if (!p.length) return viewList();
+  if (p[0] === "new") return viewNew();
+  if (p[0] === "k") {
+    if (!data[p[1]]) return viewMissing();
+    if (p.length === 2) return viewDetail(p[1]);
+    if (p[2] === "new") return viewDetailForm(p[1]);
+    if (p[2] === "edit" && p[3]) return viewDetailForm(p[1], p[3]);
+  }
+  viewMissing();
+}
+
+app.addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-href]");
+  if (tr) location.hash = tr.dataset.href;
+});
+window.addEventListener("hashchange", route);
+
+root.on("value", snap => {
+  data = snap.val() || {};
+  const first = !loaded;
+  loaded = true;
+  const s = document.getElementById("status");
+  s.textContent = "接続中：変更はリアルタイムに保存・反映されます";
+  s.className = "status";
+  if (first || !formOpen) route(); // 入力中のフォームは再描画しない
+}, showError);
+</script>
+</body>
+</html>
