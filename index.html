@@ -94,7 +94,8 @@ function calc(k) {
     }
   }
   const last = ds[ds.length - 1];
-  return { ds, amt, wins, failed: !!last && last.result === "lose" };
+  // 表示する現在の金額は、馬券を買える100円単位で切り捨てる（積算自体は10円単位のまま）
+  return { ds, amt: Math.floor(amt / 100) * 100, wins, failed: !!last && last.result === "lose" };
 }
 
 /* ---------- 一覧 ---------- */
