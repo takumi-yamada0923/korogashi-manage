@@ -136,12 +136,34 @@ function viewNew() {
   };
 }
 
+/* ---------- 転がしの編集 ---------- */
+function viewEditK(id) {
+  formOpen = true;
+  const k = data[id];
+  app.innerHTML = `
+    <h2>転がしの編集</h2>
+    <div class="form">
+      <label>タイトル<input id="f-title" maxlength="50" value="${esc(k.title)}"></label>
+      <label>形式<select id="f-type">${opts(Object.entries(TYPES), k.type)}</select></label>
+      <label>初期金額（円）<input id="f-init" type="number" min="100" step="100" inputmode="numeric" value="${esc(k.initial)}"></label>
+      <div class="btns"><button class="primary" id="f-save">登録</button><a class="btn" href="#/k/${esc(id)}">戻る</a></div>
+    </div>`;
+  document.getElementById("f-save").onclick = () => {
+    const title = document.getElementById("f-title").value.trim();
+    const initial = Math.floor(Number(document.getElementById("f-init").value));
+    if (!title) return alert("タイトルを入力してください");
+    if (!(initial > 0)) return alert("初期金額を入力してください");
+    root.child(id).update({ title, type: document.getElementById("f-type").value, initial })
+      .then(() => { location.hash = "#/k/" + id; }).catch(showError);
+  };
+}
+
 /* ---------- 各転がし詳細 ---------- */
 function viewDetail(id) {
   const k = data[id], c = calc(k);
   app.innerHTML = `
     <div class="bar"><h2>${esc(k.title)}</h2>
-      <div class="btns"><a class="btn" href="#/">一覧へ</a><a class="btn primary" href="#/k/${esc(id)}/new">新規登録</a></div></div>
+      <div class="btns"><a class="btn" href="#/">一覧へ</a><a class="btn" href="#/k/${esc(id)}/modify">転がしを編集</a><a class="btn primary" href="#/k/${esc(id)}/new">新規登録</a></div></div>
     <p class="sum"><span>形式：<b>${TYPES[k.type] || ""}</b></span><span>ステータス：<b>${c.failed ? "転がし失敗" : "転がし中"}</b></span>
       <span>初期金額：<b>${yen(k.initial)}</b></span><span>現在の金額：<b>${yen(c.amt)}</b></span></p>
     <div class="wrap"><table>
@@ -212,6 +234,7 @@ function route() {
   if (p[0] === "k") {
     if (!data[p[1]]) return viewMissing();
     if (p.length === 2) return viewDetail(p[1]);
+    if (p[2] === "modify") return viewEditK(p[1]);
     if (p[2] === "new") return viewDetailForm(p[1]);
     if (p[2] === "edit" && p[3]) return viewDetailForm(p[1], p[3]);
   }
