@@ -26,6 +26,9 @@ th{background:#e6ede9;font-weight:600}
 tr[data-href]{cursor:pointer}
 tr[data-href]:hover{background:#eef6f1}
 tr.fail,tr.fail:hover{background:#e4e4e4;color:#555}
+tr.total td{font-weight:700;background:#f4f8f6}
+.neg{color:var(--red)}.pos{color:var(--g)}
+.note{color:var(--mu);font-size:13px;margin:0 0 10px}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .form{background:#fff;border:1px solid var(--ln);border-radius:6px;padding:16px;display:grid;gap:14px;max-width:460px}
 .form label{display:grid;gap:4px;font-weight:600}
@@ -56,18 +59,24 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const root = firebase.database().ref("korogashi"); // 既存データと混ざらない専用パス
+const staffRoot = firebase.database().ref("korogashiStaff"); // 担当者
 
 const COURSES = ["札幌","函館","福島","新潟","東京","中山","中京","京都","阪神","小倉"];
 const TYPES = { tan: "単コロ", fuku: "複コロ" };
 const RES = { none: "未選択", win: "成功", lose: "失敗" };
 const app = document.getElementById("app");
-let data = {}, loaded = false, formOpen = false;
+let data = {}, staff = {}, loaded = false, formOpen = false;
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const yen = n => Number(n).toLocaleString("ja-JP") + "円";
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const opts = (list, sel) => list.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(sel) ? " selected" : ""}>${esc(l)}</option>`).join("");
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+
+const staffName = id => (staff[id] && staff[id].name) || "未割当";
+const staffList = () => Object.entries(staff).map(([id, s]) => ({ id, ...s })).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+const staffOpts = sel => opts([["", "未割当"], ...staffList().map(s => [s.id, s.name])], sel || "");
+const bal = n => `<span class="${n > 0 ? "pos" : n < 0 ? "neg" : ""}">${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toLocaleString("ja-JP")}円</span>`;
 
 function showError(e) {
   console.error(e);
@@ -103,12 +112,12 @@ function viewList() {
   const rows = Object.entries(data).map(([id, k]) => ({ id, k, c: calc(k) }))
     .sort((a, b) => (b.k.createdAt || 0) - (a.k.createdAt || 0));
   app.innerHTML = `
-    <div class="bar"><h2>転がし一覧</h2><a class="btn primary" href="#/new">新規作成</a></div>
+    <div class="bar"><h2>転がし一覧</h2><div class="btns"><a class="btn" href="#/staff">担当者登録</a><a class="btn" href="#/balance">担当者別収支</a><a class="btn primary" href="#/new">新規作成</a></div></div>
     <div class="wrap"><table>
-      <thead><tr><th>タイトル</th><th>形式</th><th>ステータス</th><th class="num">成功回数</th><th class="num">初期金額</th><th class="num">現在の金額</th></tr></thead>
+      <thead><tr><th>タイトル</th><th>担当者</th><th>形式</th><th>ステータス</th><th class="num">成功回数</th><th class="num">初期金額</th><th class="num">現在の金額</th></tr></thead>
       <tbody>${rows.map(({ id, k, c }) => `
         <tr data-href="#/k/${esc(id)}" class="${c.failed ? "fail" : ""}">
-          <td>${esc(k.title)}</td><td>${TYPES[k.type] || ""}</td>
+          <td>${esc(k.title)}</td><td>${esc(staffName(k.staffId))}</td><td>${TYPES[k.type] || ""}</td>
           <td>${c.failed ? "転がし失敗" : "転がし中"}</td>
           <td class="num">${c.wins}</td><td class="num">${yen(k.initial)}</td><td class="num">${yen(c.amt)}</td>
         </tr>`).join("")}</tbody>
@@ -124,6 +133,7 @@ function viewNew() {
       <label>タイトル<input id="f-title" maxlength="50"></label>
       <label>形式<select id="f-type">${opts(Object.entries(TYPES), "tan")}</select></label>
       <label>初期金額（円）<input id="f-init" type="number" min="100" step="100" inputmode="numeric"></label>
+      <label>担当者<select id="f-staff">${staffOpts("")}</select></label>
       <div class="btns"><button class="primary" id="f-save">登録</button><a class="btn" href="#/">戻る</a></div>
     </div>`;
   document.getElementById("f-save").onclick = () => {
@@ -131,7 +141,7 @@ function viewNew() {
     const initial = Math.floor(Number(document.getElementById("f-init").value));
     if (!title) return alert("タイトルを入力してください");
     if (!(initial > 0)) return alert("初期金額を入力してください");
-    root.push({ title, type: document.getElementById("f-type").value, initial, createdAt: Date.now() })
+    root.push({ title, type: document.getElementById("f-type").value, initial, staffId: document.getElementById("f-staff").value, createdAt: Date.now() })
       .then(() => { location.hash = "#/"; }).catch(showError);
   };
 }
@@ -146,6 +156,7 @@ function viewEditK(id) {
       <label>タイトル<input id="f-title" maxlength="50" value="${esc(k.title)}"></label>
       <label>形式<select id="f-type">${opts(Object.entries(TYPES), k.type)}</select></label>
       <label>初期金額（円）<input id="f-init" type="number" min="100" step="100" inputmode="numeric" value="${esc(k.initial)}"></label>
+      <label>担当者<select id="f-staff">${staffOpts(k.staffId)}</select></label>
       <div class="btns"><button class="primary" id="f-save">登録</button><a class="btn" href="#/k/${esc(id)}">戻る</a></div>
     </div>`;
   document.getElementById("f-save").onclick = () => {
@@ -153,7 +164,7 @@ function viewEditK(id) {
     const initial = Math.floor(Number(document.getElementById("f-init").value));
     if (!title) return alert("タイトルを入力してください");
     if (!(initial > 0)) return alert("初期金額を入力してください");
-    root.child(id).update({ title, type: document.getElementById("f-type").value, initial })
+    root.child(id).update({ title, type: document.getElementById("f-type").value, initial, staffId: document.getElementById("f-staff").value })
       .then(() => { location.hash = "#/k/" + id; }).catch(showError);
   };
 }
@@ -164,7 +175,7 @@ function viewDetail(id) {
   app.innerHTML = `
     <div class="bar"><h2>${esc(k.title)}</h2>
       <div class="btns"><a class="btn" href="#/">一覧へ</a><a class="btn" href="#/k/${esc(id)}/modify">転がしを編集</a><a class="btn primary" href="#/k/${esc(id)}/new">新規登録</a></div></div>
-    <p class="sum"><span>形式：<b>${TYPES[k.type] || ""}</b></span><span>ステータス：<b>${c.failed ? "転がし失敗" : "転がし中"}</b></span>
+    <p class="sum"><span>担当者：<b>${esc(staffName(k.staffId))}</b></span><span>形式：<b>${TYPES[k.type] || ""}</b></span><span>ステータス：<b>${c.failed ? "転がし失敗" : "転がし中"}</b></span>
       <span>初期金額：<b>${yen(k.initial)}</b></span><span>現在の金額：<b>${yen(c.amt)}</b></span></p>
     <div class="wrap"><table>
       <thead><tr><th>日付</th><th>競馬場</th><th class="num">レース</th><th class="num">馬番</th><th class="num">オッズ</th><th>結果</th><th class="num">その時点の金額</th></tr></thead>
@@ -224,6 +235,67 @@ function viewMissing() {
   app.innerHTML = '<div class="empty">データが見つかりません。<br><a href="#/">一覧へ戻る</a></div>';
 }
 
+/* ---------- 担当者登録 ---------- */
+function viewStaff() {
+  const list = staffList();
+  app.innerHTML = `
+    <div class="bar"><h2>担当者登録</h2><a class="btn" href="#/">一覧へ</a></div>
+    <div class="form">
+      <label>名前<input id="f-name" maxlength="30"></label>
+      <div class="btns"><button class="primary" id="f-save">登録</button></div>
+    </div>
+    <h2 style="margin-top:20px">登録済みの担当者</h2>
+    <div class="wrap"><table style="min-width:0"><thead><tr><th>名前</th></tr></thead>
+      <tbody>${list.map(t => `<tr><td>${esc(t.name)}</td></tr>`).join("")}</tbody></table>
+      ${list.length ? "" : '<div class="empty">担当者がまだ登録されていません。</div>'}</div>`;
+  const input = document.getElementById("f-name");
+  const save = () => {
+    const name = input.value.trim();
+    if (!name) return alert("名前を入力してください");
+    if (list.some(t => t.name === name)) return alert("同じ名前の担当者が登録済みです");
+    staffRoot.push({ name, createdAt: Date.now() }).catch(showError);
+  };
+  document.getElementById("f-save").onclick = save;
+  input.addEventListener("keydown", e => { if (e.key === "Enter") save(); });
+}
+
+/* ---------- 担当者別収支 ---------- */
+// 収支 ＝ 現在の金額 − 初期金額（転がし中のものは現在の金額で計上）
+function viewBalance(sid) {
+  const items = Object.entries(data).map(([id, k]) => ({ id, k, c: calc(k) }));
+  const keyOf = k => (staff[k.staffId] ? k.staffId : "none");
+  if (!sid) {
+    const g = {};
+    items.forEach(({ k, c }) => {
+      const x = g[keyOf(k)] || (g[keyOf(k)] = { n: 0, init: 0, cur: 0 });
+      x.n++; x.init += Number(k.initial) || 0; x.cur += c.amt;
+    });
+    const rows = staffList().map(t => ({ key: t.id, name: t.name, ...(g[t.id] || { n: 0, init: 0, cur: 0 }) }));
+    if (g.none) rows.push({ key: "none", name: "未割当", ...g.none });
+    const tot = rows.reduce((a, r) => ({ n: a.n + r.n, init: a.init + r.init, cur: a.cur + r.cur }), { n: 0, init: 0, cur: 0 });
+    app.innerHTML = `
+      <div class="bar"><h2>担当者別収支</h2><div class="btns"><a class="btn" href="#/staff">担当者登録</a><a class="btn" href="#/">一覧へ</a></div></div>
+      <p class="note">収支 ＝ 現在の金額 − 初期金額（転がし中のものは現在の金額で計上）。行をクリックすると担当者ごとの内訳を表示します。</p>
+      <div class="wrap"><table>
+        <thead><tr><th>担当者</th><th class="num">転がし数</th><th class="num">初期金額合計</th><th class="num">現在の金額合計</th><th class="num">収支</th></tr></thead>
+        <tbody>${rows.map(r => `<tr data-href="#/balance/${esc(r.key)}"><td>${esc(r.name)}</td><td class="num">${r.n}</td><td class="num">${yen(r.init)}</td><td class="num">${yen(r.cur)}</td><td class="num">${bal(r.cur - r.init)}</td></tr>`).join("")}
+        <tr class="total"><td>合計</td><td class="num">${tot.n}</td><td class="num">${yen(tot.init)}</td><td class="num">${yen(tot.cur)}</td><td class="num">${bal(tot.cur - tot.init)}</td></tr></tbody>
+      </table></div>`;
+    return;
+  }
+  if (sid !== "none" && !staff[sid]) return viewMissing();
+  const mine = items.filter(({ k }) => keyOf(k) === sid).sort((a, b) => (b.k.createdAt || 0) - (a.k.createdAt || 0));
+  const init = mine.reduce((a, { k }) => a + (Number(k.initial) || 0), 0);
+  const cur = mine.reduce((a, { c }) => a + c.amt, 0);
+  app.innerHTML = `
+    <div class="bar"><h2>${esc(sid === "none" ? "未割当" : staff[sid].name)}の収支</h2><a class="btn" href="#/balance">担当者別収支へ</a></div>
+    <div class="wrap"><table>
+      <thead><tr><th>タイトル</th><th>形式</th><th>ステータス</th><th class="num">初期金額</th><th class="num">現在の金額</th><th class="num">収支</th></tr></thead>
+      <tbody>${mine.map(({ id, k, c }) => `<tr data-href="#/k/${esc(id)}" class="${c.failed ? "fail" : ""}"><td>${esc(k.title)}</td><td>${TYPES[k.type] || ""}</td><td>${c.failed ? "転がし失敗" : "転がし中"}</td><td class="num">${yen(k.initial)}</td><td class="num">${yen(c.amt)}</td><td class="num">${bal(c.amt - (Number(k.initial) || 0))}</td></tr>`).join("")}
+      ${mine.length ? `<tr class="total"><td colspan="3">合計</td><td class="num">${yen(init)}</td><td class="num">${yen(cur)}</td><td class="num">${bal(cur - init)}</td></tr>` : ""}</tbody>
+    </table>${mine.length ? "" : '<div class="empty">この担当者の転がしはまだありません。</div>'}</div>`;
+}
+
 /* ---------- ルーティング ---------- */
 function route() {
   if (!loaded) { app.innerHTML = '<div class="empty">読み込み中...</div>'; return; }
@@ -231,6 +303,8 @@ function route() {
   formOpen = false;
   if (!p.length) return viewList();
   if (p[0] === "new") return viewNew();
+  if (p[0] === "staff") return viewStaff();
+  if (p[0] === "balance") return viewBalance(p[1]);
   if (p[0] === "k") {
     if (!data[p[1]]) return viewMissing();
     if (p.length === 2) return viewDetail(p[1]);
@@ -247,15 +321,18 @@ app.addEventListener("click", e => {
 });
 window.addEventListener("hashchange", route);
 
-root.on("value", snap => {
-  data = snap.val() || {};
+let gotK = false, gotS = false;
+function onData() {
+  if (!(gotK && gotS)) return;
   const first = !loaded;
   loaded = true;
-  const s = document.getElementById("status");
-  s.textContent = "接続中：変更はリアルタイムに保存・反映されます";
-  s.className = "status";
+  const st = document.getElementById("status");
+  st.textContent = "接続中：変更はリアルタイムに保存・反映されます";
+  st.className = "status";
   if (first || !formOpen) route(); // 入力中のフォームは再描画しない
-}, showError);
+}
+root.on("value", snap => { data = snap.val() || {}; gotK = true; onData(); }, showError);
+staffRoot.on("value", snap => { staff = snap.val() || {}; gotS = true; onData(); }, showError);
 </script>
 </body>
 </html>
