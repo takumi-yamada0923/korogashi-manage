@@ -1,0 +1,1 @@
+# korogashi-manage
