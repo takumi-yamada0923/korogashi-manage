@@ -92,6 +92,7 @@ function calc(k) {
       amt = Math.floor(amt * Math.round(Number(d.odds) * 10) / 100) * 10;
       wins++;
     }
+    d.amt = Math.floor(amt / 100) * 100; // この行の時点での金額（表示用）
   }
   const last = ds[ds.length - 1];
   // 表示する現在の金額は、馬券を買える100円単位で切り捨てる（積算自体は10円単位のまま）
@@ -145,11 +146,12 @@ function viewDetail(id) {
     <p class="sum"><span>形式：<b>${TYPES[k.type] || ""}</b></span><span>ステータス：<b>${c.failed ? "転がし失敗" : "転がし中"}</b></span>
       <span>初期金額：<b>${yen(k.initial)}</b></span><span>現在の金額：<b>${yen(c.amt)}</b></span></p>
     <div class="wrap"><table>
-      <thead><tr><th>日付</th><th>競馬場</th><th class="num">レース</th><th class="num">馬番</th><th class="num">オッズ</th><th>結果</th></tr></thead>
+      <thead><tr><th>日付</th><th>競馬場</th><th class="num">レース</th><th class="num">馬番</th><th class="num">オッズ</th><th>結果</th><th class="num">その時点の金額</th></tr></thead>
       <tbody>${c.ds.map(d => `
         <tr data-href="#/k/${esc(id)}/edit/${esc(d.id)}">
           <td>${esc(d.date)}</td><td>${esc(d.course)}</td><td class="num">${esc(d.race)}R</td>
           <td class="num">${esc(d.horse)}</td><td class="num">${Number(d.odds).toFixed(1)}</td><td>${RES[d.result] || RES.none}</td>
+          <td class="num">${yen(d.amt)}</td>
         </tr>`).join("")}</tbody>
     </table>${c.ds.length ? "" : '<div class="empty">登録された買い目がありません。「新規登録」から追加してください。</div>'}</div>
     <p><button class="danger" id="del-k">この転がしを削除</button></p>`;
