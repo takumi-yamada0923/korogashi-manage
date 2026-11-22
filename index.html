@@ -29,6 +29,9 @@ tr.fail,tr.fail:hover{background:#e4e4e4;color:#555}
 tr.total td{font-weight:700;background:#f4f8f6}
 .neg{color:var(--red)}.pos{color:var(--g)}
 .note{color:var(--mu);font-size:13px;margin:0 0 10px}
+.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:12px}
+.filters label{display:grid;gap:2px;font-size:13px;color:var(--mu)}
+.filters select{font:inherit;padding:6px 8px;border:1px solid var(--ln);border-radius:6px;background:#fff;color:var(--tx)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .form{background:#fff;border:1px solid var(--ln);border-radius:6px;padding:16px;display:grid;gap:14px;max-width:460px}
 .form label{display:grid;gap:4px;font-weight:600}
@@ -104,24 +107,42 @@ function calc(k) {
     d.amt = amt; // この行の時点での金額
   }
   const last = ds[ds.length - 1];
-  return { ds, amt, wins, failed: !!last && last.result === "lose" };
+  const failed = !!last && last.result === "lose";
+  // ステータス：最新の詳細が失敗なら「転がし失敗」、手動で終了にしていれば「終了」、それ以外は「転がし中」
+  return { ds, amt, wins, failed, status: failed ? "転がし失敗" : k.ended ? "終了" : "転がし中" };
 }
 
 /* ---------- 一覧 ---------- */
+const STATUSES = ["転がし中", "転がし失敗", "終了"];
+let filters = { staff: "", type: "", status: "" }; // 一覧の絞り込み条件（再描画しても保持）
 function viewList() {
-  const rows = Object.entries(data).map(([id, k]) => ({ id, k, c: calc(k) }))
+  const all = Object.entries(data).map(([id, k]) => ({ id, k, c: calc(k) }))
     .sort((a, b) => (b.k.createdAt || 0) - (a.k.createdAt || 0));
+  const rows = all.filter(({ k, c }) =>
+    (!filters.staff || (staff[k.staffId] ? k.staffId : "none") === filters.staff) &&
+    (!filters.type || k.type === filters.type) &&
+    (!filters.status || c.status === filters.status));
   app.innerHTML = `
     <div class="bar"><h2>転がし一覧</h2><div class="btns"><a class="btn" href="#/staff">担当者登録</a><a class="btn" href="#/balance">担当者別収支</a><a class="btn primary" href="#/new">新規作成</a></div></div>
+    <div class="filters">
+      <label>担当者<select id="flt-staff">${opts([["", "すべて"], ...staffList().map(t => [t.id, t.name]), ["none", "未割当"]], filters.staff)}</select></label>
+      <label>形式<select id="flt-type">${opts([["", "すべて"], ...Object.entries(TYPES)], filters.type)}</select></label>
+      <label>ステータス<select id="flt-status">${opts([["", "すべて"], ...STATUSES.map(x => [x, x])], filters.status)}</select></label>
+      <button id="flt-clear">条件をクリア</button>
+    </div>
     <div class="wrap"><table>
       <thead><tr><th>タイトル</th><th>担当者</th><th>形式</th><th>ステータス</th><th class="num">成功回数</th><th class="num">初期金額</th><th class="num">現在の金額</th></tr></thead>
       <tbody>${rows.map(({ id, k, c }) => `
         <tr data-href="#/k/${esc(id)}" class="${c.failed ? "fail" : ""}">
           <td>${esc(k.title)}</td><td>${esc(staffName(k.staffId))}</td><td>${TYPES[k.type] || ""}</td>
-          <td>${c.failed ? "転がし失敗" : "転がし中"}</td>
+          <td>${c.status}</td>
           <td class="num">${c.wins}</td><td class="num">${yen(k.initial)}</td><td class="num">${yen(c.amt)}</td>
         </tr>`).join("")}</tbody>
-    </table>${rows.length ? "" : '<div class="empty">まだ転がしがありません。「新規作成」から登録してください。</div>'}</div>`;
+    </table>${rows.length ? "" : `<div class="empty">${all.length ? "条件に一致する転がしがありません。" : "まだ転がしがありません。「新規作成」から登録してください。"}</div>`}</div>`;
+  [["staff", "flt-staff"], ["type", "flt-type"], ["status", "flt-status"]].forEach(([key, el]) => {
+    document.getElementById(el).onchange = e => { filters[key] = e.target.value; viewList(); };
+  });
+  document.getElementById("flt-clear").onclick = () => { filters = { staff: "", type: "", status: "" }; viewList(); };
 }
 
 /* ---------- 新規作成 ---------- */
@@ -174,8 +195,8 @@ function viewDetail(id) {
   const k = data[id], c = calc(k);
   app.innerHTML = `
     <div class="bar"><h2>${esc(k.title)}</h2>
-      <div class="btns"><a class="btn" href="#/">一覧へ</a><a class="btn" href="#/k/${esc(id)}/modify">転がしを編集</a><a class="btn primary" href="#/k/${esc(id)}/new">新規登録</a></div></div>
-    <p class="sum"><span>担当者：<b>${esc(staffName(k.staffId))}</b></span><span>形式：<b>${TYPES[k.type] || ""}</b></span><span>ステータス：<b>${c.failed ? "転がし失敗" : "転がし中"}</b></span>
+      <div class="btns"><a class="btn" href="#/">一覧へ</a><a class="btn" href="#/k/${esc(id)}/modify">転がしを編集</a>${c.failed ? "" : `<button id="toggle-end">${k.ended ? "転がし中に戻す" : "終了にする"}</button>`}<a class="btn primary" href="#/k/${esc(id)}/new">新規登録</a></div></div>
+    <p class="sum"><span>担当者：<b>${esc(staffName(k.staffId))}</b></span><span>形式：<b>${TYPES[k.type] || ""}</b></span><span>ステータス：<b>${c.status}</b></span>
       <span>初期金額：<b>${yen(k.initial)}</b></span><span>現在の金額：<b>${yen(c.amt)}</b></span></p>
     <div class="wrap"><table>
       <thead><tr><th>日付</th><th>競馬場</th><th class="num">レース</th><th class="num">馬番</th><th class="num">オッズ</th><th>結果</th><th class="num">その時点の金額</th></tr></thead>
@@ -187,6 +208,11 @@ function viewDetail(id) {
         </tr>`).join("")}</tbody>
     </table>${c.ds.length ? "" : '<div class="empty">登録された買い目がありません。「新規登録」から追加してください。</div>'}</div>
     <p><button class="danger" id="del-k">この転がしを削除</button></p>`;
+  const te = document.getElementById("toggle-end");
+  if (te) te.onclick = () => {
+    if (k.ended || confirm("この転がしを終了にします。よろしいですか？"))
+      root.child(id).update({ ended: !k.ended }).catch(showError);
+  };
   document.getElementById("del-k").onclick = () => {
     if (confirm("この転がしと登録済みの詳細をすべて削除します。よろしいですか？"))
       root.child(id).remove().then(() => { location.hash = "#/"; }).catch(showError);
@@ -291,7 +317,7 @@ function viewBalance(sid) {
     <div class="bar"><h2>${esc(sid === "none" ? "未割当" : staff[sid].name)}の収支</h2><a class="btn" href="#/balance">担当者別収支へ</a></div>
     <div class="wrap"><table>
       <thead><tr><th>タイトル</th><th>形式</th><th>ステータス</th><th class="num">初期金額</th><th class="num">現在の金額</th><th class="num">収支</th></tr></thead>
-      <tbody>${mine.map(({ id, k, c }) => `<tr data-href="#/k/${esc(id)}" class="${c.failed ? "fail" : ""}"><td>${esc(k.title)}</td><td>${TYPES[k.type] || ""}</td><td>${c.failed ? "転がし失敗" : "転がし中"}</td><td class="num">${yen(k.initial)}</td><td class="num">${yen(c.amt)}</td><td class="num">${bal(c.amt - (Number(k.initial) || 0))}</td></tr>`).join("")}
+      <tbody>${mine.map(({ id, k, c }) => `<tr data-href="#/k/${esc(id)}" class="${c.failed ? "fail" : ""}"><td>${esc(k.title)}</td><td>${TYPES[k.type] || ""}</td><td>${c.status}</td><td class="num">${yen(k.initial)}</td><td class="num">${yen(c.amt)}</td><td class="num">${bal(c.amt - (Number(k.initial) || 0))}</td></tr>`).join("")}
       ${mine.length ? `<tr class="total"><td colspan="3">合計</td><td class="num">${yen(init)}</td><td class="num">${yen(cur)}</td><td class="num">${bal(cur - init)}</td></tr>` : ""}</tbody>
     </table>${mine.length ? "" : '<div class="empty">この担当者の転がしはまだありません。</div>'}</div>`;
 }
